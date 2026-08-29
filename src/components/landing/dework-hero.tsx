@@ -28,6 +28,8 @@ const CAL_LINK = "drapeai"
 const PHONE_FIELD_ID = "phone-number-field"
 const CALL_ATTEMPTS_STORAGE_KEY = "dework_call_attempts"
 const GENERIC_CALL_ERROR = "Something went wrong. Please try again."
+const INTERACTION_POLL_INTERVAL_MS = 5000
+const INTERACTION_POLL_MAX_ATTEMPTS = 60
 
 /**
  * Validates a phone number against two rules:
@@ -66,6 +68,7 @@ type StoredCallAttempt = {
   attemptId: string
   phoneNumber: string
   createdAt: string
+  interactionId?: string
 }
 
 /** Appends a new outbound-call attempt id to the visitor's local history. */
@@ -83,6 +86,23 @@ function storeCallAttempt(attemptId: string, phoneNumber: string) {
   } catch {
     // localStorage may be unavailable (e.g. private browsing); the attempt
     // still succeeded server-side, so this is a non-fatal, silent no-op.
+  }
+}
+
+/** Backfills the interaction id onto a previously stored attempt, once known. */
+function updateStoredInteractionId(attemptId: string, interactionId: string) {
+  if (typeof window === "undefined") return
+
+  try {
+    const raw = window.localStorage.getItem(CALL_ATTEMPTS_STORAGE_KEY)
+    if (!raw) return
+    const existing: StoredCallAttempt[] = JSON.parse(raw)
+    const next = existing.map((entry) =>
+      entry.attemptId === attemptId ? { ...entry, interactionId } : entry
+    )
+    window.localStorage.setItem(CALL_ATTEMPTS_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // non-fatal, see storeCallAttempt above.
   }
 }
 
@@ -350,15 +370,148 @@ function usePhoneFieldHint() {
   }, [])
 }
 
+/**
+ * Polls the list-attempts API every few seconds for a given attempt id until
+ * it shows up in the results, then returns its interaction id. Polling stops
+ * once found, once the attempt id changes/clears, or after a safety cap.
+ */
+function usePollForInteractionId(attemptId: string | null) {
+  const [result, setResult] = useState<{ attemptId: string; interactionId: string } | null>(
+    null
+  )
+
+  useEffect(() => {
+    if (!attemptId) return
+
+    let cancelled = false
+    let attempts = 0
+    let timeoutId: ReturnType<typeof setTimeout>
+
+    const poll = async () => {
+      attempts += 1
+
+      try {
+        const response = await fetch(
+          `/api/call-attempts?attemptId=${encodeURIComponent(attemptId)}`
+        )
+        const data = (await response.json().catch(() => null)) as
+          | { found?: boolean; interactionId?: string }
+          | null
+
+        if (cancelled) return
+
+        if (response.ok && data?.found && data.interactionId) {
+          setResult({ attemptId, interactionId: data.interactionId })
+          return
+        }
+      } catch {
+        // Transient network error — keep polling until the attempt cap.
+      }
+
+      if (!cancelled && attempts < INTERACTION_POLL_MAX_ATTEMPTS) {
+        timeoutId = setTimeout(poll, INTERACTION_POLL_INTERVAL_MS)
+      }
+    }
+
+    timeoutId = setTimeout(poll, INTERACTION_POLL_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timeoutId)
+    }
+  }, [attemptId])
+
+  // Derive the reset instead of imperatively clearing state on attempt-id
+  // change: a stale result simply won't match the current attemptId.
+  return result?.attemptId === attemptId ? result.interactionId : null
+}
+
+type TranscriptMessage = {
+  turnId: number
+  role: string
+  content: string
+}
+
+/**
+ * Fetches the call transcript for a resolved interaction id. Returns the
+ * message list once ready, or a failure flag if the fetch didn't succeed —
+ * both keyed to the current interactionId so stale results never leak in.
+ */
+function useTranscript(interactionId: string | null) {
+  const [result, setResult] = useState<{
+    interactionId: string
+    messages: TranscriptMessage[]
+  } | null>(null)
+  const [failedId, setFailedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!interactionId) return
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const response = await fetch(
+          `/api/call-transcript?interactionId=${encodeURIComponent(interactionId)}`
+        )
+        const data = (await response.json().catch(() => null)) as
+          | { messages?: TranscriptMessage[] }
+          | null
+
+        if (cancelled) return
+
+        if (response.ok && data?.messages) {
+          setResult({ interactionId, messages: data.messages })
+        } else {
+          setFailedId(interactionId)
+        }
+      } catch {
+        if (!cancelled) setFailedId(interactionId)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [interactionId])
+
+  return {
+    messages: result?.interactionId === interactionId ? result.messages : null,
+    failed: interactionId !== null && failedId === interactionId,
+  }
+}
+
+type CallFlowStage = "success" | "loading" | "transcript" | "error" | null
+
 export function DeworkHero() {
   const [phone, setPhone] = useState("")
   const [countryId, setCountryId] = useState("in")
   const [isCalling, setIsCalling] = useState(false)
-  const [callResult, setCallResult] = useState<"success" | "error" | null>(null)
+  const [flowStage, setFlowStage] = useState<CallFlowStage>(null)
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null)
   const openBookingModal = useCalBooking(CAL_LINK)
   const selectedCountry = COUNTRY_CODES.find((c) => c.id === countryId) ?? COUNTRY_CODES[0]
   const phoneError = getPhoneValidationError(phone)
+  const interactionId = usePollForInteractionId(activeAttemptId)
+  const { messages: transcriptMessages, failed: transcriptFailed } = useTranscript(interactionId)
   usePhoneFieldHint()
+
+  useEffect(() => {
+    if (activeAttemptId && interactionId) {
+      updateStoredInteractionId(activeAttemptId, interactionId)
+    }
+  }, [activeAttemptId, interactionId])
+
+  // Once the user has moved past the "call sent" popup into the spinner,
+  // derive the effective stage instead of imperatively advancing state —
+  // it naturally becomes "transcript"/"error" the moment the data resolves.
+  const displayStage: CallFlowStage =
+    flowStage === "loading"
+      ? transcriptMessages
+        ? "transcript"
+        : transcriptFailed
+          ? "error"
+          : "loading"
+      : flowStage
 
   const canSubmitCall = phone.length > 0 && !phoneError && !isCalling
 
@@ -383,14 +536,15 @@ export function DeworkHero() {
         | null
 
       if (!response.ok || !data?.attempt_id) {
-        setCallResult("error")
+        setFlowStage("error")
         return
       }
 
       storeCallAttempt(data.attempt_id, fullPhoneNumber)
-      setCallResult("success")
+      setActiveAttemptId(data.attempt_id)
+      setFlowStage("success")
     } catch {
-      setCallResult("error")
+      setFlowStage("error")
     } finally {
       setIsCalling(false)
     }
@@ -515,28 +669,83 @@ export function DeworkHero() {
       </svg>
 
       <Dialog
-        isOpen={callResult === "success"}
-        onOpenChange={(open) => !open && setCallResult(null)}
+        isOpen={displayStage !== null}
+        onOpenChange={(open) => !open && setFlowStage(null)}
       >
-        <DialogHeader>
-          <DialogTitle>Call on its way</DialogTitle>
-          <DialogDescription>
-            We&apos;ve sent a call to your number — pick it up, then come back
-            here for your call analysis.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter showCloseButton />
-      </Dialog>
+        {displayStage === "success" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Call on its way</DialogTitle>
+              <DialogDescription>
+                We&apos;ve sent a call to your number — pick it up, then come
+                back here for your call analysis.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button onPress={() => setFlowStage(transcriptMessages ? "transcript" : "loading")}>
+                Got it
+              </Button>
+            </DialogFooter>
+          </>
+        )}
 
-      <Dialog
-        isOpen={callResult === "error"}
-        onOpenChange={(open) => !open && setCallResult(null)}
-      >
-        <DialogHeader>
-          <DialogTitle>Something went wrong</DialogTitle>
-          <DialogDescription>{GENERIC_CALL_ERROR}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter showCloseButton />
+        {displayStage === "loading" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Fetching call details</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col items-center gap-3 py-4">
+              <Loader2 className="size-6 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">
+                Hold on, we&apos;re fetching your call details…
+              </p>
+            </div>
+          </>
+        )}
+
+        {displayStage === "transcript" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Call analysis</DialogTitle>
+              <DialogDescription>
+                Here&apos;s how your call with our agent went.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex max-h-80 flex-col gap-2 overflow-y-auto py-1">
+              {transcriptMessages?.map((message) => (
+                <div
+                  key={message.turnId}
+                  className={cn(
+                    "max-w-[85%] rounded-2xl px-4 py-2 text-sm leading-relaxed",
+                    message.role === "assistant"
+                      ? "self-start bg-chart-2 text-foreground"
+                      : "self-end bg-primary text-primary-foreground"
+                  )}
+                >
+                  {message.content}
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button
+                onPress={openBookingModal}
+                className="w-full rounded-full bg-foreground text-background hover:bg-foreground/90 sm:w-auto"
+              >
+                Book a call now
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {displayStage === "error" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Something went wrong</DialogTitle>
+              <DialogDescription>{GENERIC_CALL_ERROR}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter showCloseButton />
+          </>
+        )}
       </Dialog>
     </section>
   )

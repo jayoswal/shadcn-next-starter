@@ -116,6 +116,21 @@
 
 .driver-hint {
  --driver-hint-color: var(--primary);
+ /* Keep the beacon below our own dialogs (z-50) — the driver.js hints
+    stylesheet otherwise sets an extremely high z-index by default. */
+ z-index: 10 !important;
+}
+
+.driver-hint[aria-expanded="true"] {
+ z-index: 10 !important;
+}
+
+.driver-popover {
+ z-index: 10 !important;
+}
+
+.driver-hint-overlay {
+ z-index: 9 !important;
 }
 
 .driver-hint.dework-phone-hint-beacon {

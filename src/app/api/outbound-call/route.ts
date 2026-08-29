@@ -46,6 +46,7 @@ export async function POST(request: Request) {
     SARVAM_APP_VERSION,
     SARVAM_CONNECTION_ID,
     SARVAM_AGENT_PHONE_NUMBER,
+    SARVAM_HANDLER_NAME,
     SARVAM_WEBHOOK_URL,
   } = process.env
 
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
             agent_phone_number: SARVAM_AGENT_PHONE_NUMBER,
           },
           agent_variables: {
-            handler_name: "Riya",
+            handler_name: SARVAM_HANDLER_NAME || "Kunal",
           },
         },
         user_config: {
