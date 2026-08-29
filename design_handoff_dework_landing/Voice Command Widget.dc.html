@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@keyframes vw-flow { from { transform: translateX(-50%); } to { transform: translateX(0%); } }
+body { margin: 0; }
+</style>
+</helmet>
+<div style="width:640px;height:180px;background:oklch(98% 0.004 250);border-radius:28px;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;">
+  <div style="position:relative;height:100%;width:100%;overflow:hidden;">
+    <div style="position:absolute;top:50%;left:0;right:calc(50% + 74px);height:56px;transform:translateY(-50%);overflow:hidden;mask-image:linear-gradient(to right, transparent 0, black 24px, black 100%);-webkit-mask-image:linear-gradient(to right, transparent 0, black 24px, black 100%);">
+      <div style="position:relative;height:100%;width:100%;">
+        <sc-for list="{{leftBars}}" as="b" hint-placeholder-count="30">
+          <span style="position:absolute;left:{{b.x}}px;top:50%;width:4px;border-radius:999px;background:#7CCF00;height:{{b.h}}%;transform:translateY(-50%) scale(1, {{b.s}});"></span>
+        </sc-for>
+      </div>
+    </div>
+    <div style="position:absolute;top:50%;left:calc(50% + 74px);right:0;height:56px;transform:translateY(-50%);overflow:hidden;mask-image:linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);-webkit-mask-image:linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);">
+      <div style="position:relative;height:100%;width:100%;">
+        <sc-for list="{{rightBars}}" as="b" hint-placeholder-count="30">
+          <span style="position:absolute;left:{{b.x}}px;top:50%;width:4px;border-radius:999px;background:#7CCF00;height:{{b.h}}%;transform:translateY(-50%) scale(1, {{b.s}});"></span>
+        </sc-for>
+      </div>
+    </div>
+    <div style="pointer-events:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;">
+      <div style="height:56px;width:190px;border-radius:999px;border:2px solid oklch(40% 0.07 200);background:oklch(98% 0.004 250);position:relative;overflow:hidden;">
+        <sc-for list="{{letters}}" as="c" hint-placeholder-count="10">
+          <span style="position:absolute;left:{{c.x}}px;top:50%;transform:translateY(-50%) scale({{c.s}});transform-origin:center;font-size:18px;font-weight:600;color:oklch(40% 0.07 200);white-space:pre;">{{c.ch}}</span>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 640, &quot;height&quot;: 180}}">
+class Component extends DCLogic {
+  languages = ['অসমীয়া', 'বাংলা', 'बड़ो', 'डोगरी', 'ગુજરાતી', 'हिन्दी', 'ಕನ್ನಡ', 'کٲشُر', 'कोंकणी', 'मैथिली', 'മലയാളം', 'ꯃꯤꯇꯩꯂꯣꯟ', 'मराठी', 'नेपाली', 'ଓଡ଼ିଆ', 'ਪੰਜਾਬੀ', 'संस्कृतम्', 'ᱥᱟᱱᱛᱟᱲᱤ', 'سنڌي', 'தமிழ்', 'తెలుగు', 'اردو'];
+  cycleMs = 2200;
+  segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+  graphemes(word) {
+    if (this.segmenter) return Array.from(this.segmenter.segment(word), s => s.segment);
+    return word.split('');
+  }
+
+  componentDidMount() {
+    this.startTime = performance.now();
+    const loop = () => {
+      this.forceUpdate();
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  componentWillUnmount() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+  }
+
+  smoothstep(e0, e1, x) {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  buildTrack(offset, trackWidth, pillEdge) {
+    const step = 9;
+    const numSlots = Math.ceil(trackWidth / step) + 4;
+    const patternLength = numSlots * step;
+    const squeezeZone = 56;
+    const bars = [];
+    for (let i = 0; i < numSlots; i++) {
+      const x = ((i * step + offset) % patternLength) - step;
+      const h = 22 + Math.abs(Math.sin(i * 0.9) * 55) + (Math.abs(Math.sin(i * 2.1)) * 23);
+      const dist = pillEdge === 'right' ? (trackWidth - x) : x;
+      const f = this.smoothstep(0, squeezeZone, dist);
+      const s = 0.1 + 0.9 * f;
+      bars.push({ x: Math.round(x * 10) / 10, h: Math.round(Math.min(100, h)), s: Math.round(s * 100) / 100 });
+    }
+    return bars;
+  }
+
+  renderVals() {
+    const elapsed = this.startTime ? performance.now() - this.startTime : 0;
+    const trackWidth = 246;
+    const scrollOffset = (elapsed / 1000) * 22;
+    const leftBars = this.buildTrack(scrollOffset, trackWidth, 'right');
+    const rightBars = this.buildTrack(scrollOffset, trackWidth, 'left');
+    const t = (elapsed % this.cycleMs) / this.cycleMs;
+    const index = Math.floor(elapsed / this.cycleMs) % this.languages.length;
+    const word = this.languages[index];
+
+    const pillW = 190;
+    const charStep = 15;
+    const squeezeZone = 26;
+    const chars = this.graphemes(word);
+    const wordWidth = chars.length * charStep;
+    const xOffset = -wordWidth + t * (pillW + wordWidth);
+    const letters = chars.map((ch, i) => {
+      const charX = xOffset + i * charStep;
+      const sLeft = this.smoothstep(0, squeezeZone, charX);
+      const sRight = this.smoothstep(0, squeezeZone, pillW - charX);
+      const s = Math.max(0.05, Math.min(sLeft, sRight));
+      return { ch, x: Math.round(charX * 10) / 10, s: Math.round(s * 100) / 100 };
+    });
+
+    return { leftBars, rightBars, letters };
+  }
+}
+</script>
+</body>
+</html>

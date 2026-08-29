@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body { margin: 0; }
+</style>
+</helmet>
+<div style="width:640px;height:180px;background:oklch(98% 0.004 250);border-radius:28px;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;">
+  <div style="position:relative;height:100%;width:100%;overflow:hidden;">
+    <div style="position:absolute;top:50%;left:0;right:calc(50% + 74px);height:56px;transform:translateY(-50%);overflow:hidden;mask-image:linear-gradient(to right, transparent 0, black 24px, black 100%);-webkit-mask-image:linear-gradient(to right, transparent 0, black 24px, black 100%);">
+      <div style="position:relative;height:100%;width:100%;">
+        <sc-for list="{{leftChars}}" as="c" hint-placeholder-count="30">
+          <span style="position:absolute;left:{{c.x}}px;top:50%;transform:translateY(-50%) scale({{c.s}});transform-origin:center;font-size:17px;font-weight:600;color:oklch(40% 0.07 200);white-space:pre;">{{c.ch}}</span>
+        </sc-for>
+      </div>
+    </div>
+    <div style="position:absolute;top:50%;left:calc(50% + 74px);right:0;height:56px;transform:translateY(-50%);overflow:hidden;mask-image:linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);-webkit-mask-image:linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);">
+      <div style="position:relative;height:100%;width:100%;">
+        <sc-for list="{{rightChars}}" as="c" hint-placeholder-count="30">
+          <span style="position:absolute;left:{{c.x}}px;top:50%;transform:translateY(-50%) scale({{c.s}});transform-origin:center;font-size:17px;font-weight:600;color:oklch(40% 0.07 200);white-space:pre;">{{c.ch}}</span>
+        </sc-for>
+      </div>
+    </div>
+    <div style="pointer-events:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;">
+      <div style="height:56px;width:150px;border-radius:999px;border:2px solid oklch(40% 0.07 200);background:oklch(98% 0.004 250);display:flex;align-items:center;justify-content:center;padding:0 10px;">
+        <canvas ref="{{canvasRef}}" style="width:130px;height:40px;display:block;"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 640, &quot;height&quot;: 180}}">
+class Component extends DCLogic {
+  languages = ['অসমীয়া', 'বাংলা', 'बड़ो', 'डोगरी', 'ગુજરાતી', 'हिन्दी', 'ಕನ್ನಡ', 'کٲشُر', 'कोंकणी', 'मैथिली', 'മലയാളം', 'ꯃꯤꯇꯩꯂꯣꯟ', 'मराठी', 'नेपाली', 'ଓଡ଼ିଆ', 'ਪੰਜਾਬੀ', 'संस्कृतम्', 'ᱥᱟᱱᱛᱟᱲᱤ', 'سنڌي', 'தமிழ்', 'తెలుగు', 'اردو'];
+  segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  canvasRef = React.createRef();
+  canvasW = 130;
+  canvasH = 40;
+
+  graphemes(word) {
+    if (this.segmenter) return Array.from(this.segmenter.segment(word), s => s.segment);
+    return word.split('');
+  }
+
+  buildPhraseStream() {
+    const parts = [];
+    let i = 0;
+    while (i < this.languages.length) {
+      const burstSize = 2 + (i % 3);
+      const burst = this.languages.slice(i, i + burstSize).join(' ');
+      parts.push(burst);
+      parts.push(' '.repeat(8));
+      i += burstSize;
+    }
+    return parts.join('');
+  }
+
+  componentDidMount() {
+    this.startTime = performance.now();
+    this.activityLevel = 0;
+    this.charStep = 24;
+    this.charsArr = this.graphemes(this.buildPhraseStream());
+    this.patternLength = this.charsArr.length * this.charStep;
+    const loop = () => {
+      this.forceUpdate();
+      this.drawCanvas();
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  setupCanvas() {
+    const canvas = this.canvasRef.current;
+    if (!canvas || canvas.dataset.ready) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = this.canvasW * dpr;
+    canvas.height = this.canvasH * dpr;
+    canvas.getContext('2d').scale(dpr, dpr);
+    canvas.dataset.ready = '1';
+  }
+
+  roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  drawCanvas() {
+    const canvas = this.canvasRef && this.canvasRef.current;
+    if (!canvas || !this.lastEqBars) return;
+    this.setupCanvas();
+    const ctx = canvas.getContext('2d');
+    const w = this.canvasW, h = this.canvasH;
+    ctx.clearRect(0, 0, w, h);
+    const bars = this.lastEqBars;
+    const barW = 4, gap = 4.5;
+    const contentW = bars.length * barW + (bars.length - 1) * gap;
+    const startX = (w - contentW) / 2;
+    ctx.fillStyle = '#7CCF00';
+    bars.forEach((bh, i) => {
+      const x = startX + i * (barW + gap);
+      const y = (h - bh) / 2;
+      this.roundRectPath(ctx, x, y, barW, bh, barW / 2);
+      ctx.fill();
+    });
+    ctx.globalCompositeOperation = 'destination-in';
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.12, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.88, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  componentWillUnmount() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+  }
+
+  smoothstep(e0, e1, x) {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  buildTextTrack(offset, trackWidth, pillEdge) {
+    const squeezeZone = 100;
+    const out = [];
+    const visibleCount = Math.ceil(trackWidth / this.charStep) + 4;
+    const startIdx = Math.floor(offset / this.charStep) - 2;
+    for (let k = 0; k < visibleCount; k++) {
+      const i = startIdx + k;
+      const ch = this.charsArr[((i % this.charsArr.length) + this.charsArr.length) % this.charsArr.length];
+      const x = i * this.charStep - offset;
+      const dist = pillEdge === 'right' ? (trackWidth - x) : x;
+      const f = this.smoothstep(0, squeezeZone, dist);
+      const s = 0.08 + 0.92 * f;
+      out.push({ ch, x: Math.round(x * 10) / 10, s: Math.round(s * 100) / 100, isSpace: ch.trim() === '' });
+    }
+    return out;
+  }
+
+  renderVals() {
+    const elapsed = this.startTime ? performance.now() - this.startTime : 0;
+    const trackWidth = 246;
+    const squeezeZone = 100;
+    const scrollOffset = (elapsed / 1000) * 70;
+    const leftChars = this.buildTextTrack(scrollOffset, trackWidth, 'right');
+    const rightChars = this.buildTextTrack(scrollOffset, trackWidth, 'left');
+
+    const leftNearPill = leftChars.some(c => !c.isSpace && (trackWidth - c.x) < squeezeZone);
+    const rightNearPill = rightChars.some(c => !c.isSpace && c.x < squeezeZone);
+    const targetActive = (leftNearPill || rightNearPill) ? 1 : 0;
+    this.activityLevel += (targetActive - this.activityLevel) * 0.08;
+
+    const n = 16;
+    const t = elapsed / 1000;
+    const eqBars = Array.from({ length: n }, (_, i) => {
+      const shape = Math.sin(Math.PI * (i + 0.5) / n);
+      const osc = 0.5 + 0.5 * Math.sin(t * (2.2 + (i % 5) * 0.6) + i * 0.7);
+      const idleAmp = 3;
+      const activeAmp = 24;
+      const amp = idleAmp + (activeAmp - idleAmp) * this.activityLevel;
+      return Math.round(6 + shape * amp * (0.4 + 0.6 * osc));
+    });
+    this.lastEqBars = eqBars;
+
+    return { leftChars, rightChars, canvasRef: this.canvasRef };
+  }
+}
+</script>
+</body>
+</html>
